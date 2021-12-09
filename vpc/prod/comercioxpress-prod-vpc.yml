@@ -135,7 +135,7 @@ Resources:
       SubnetId: !Ref PublicSubnet2
       Tags:
         - Key: Name
-          Value: !Sub ${EnvironmentName} Nat Gateway (AZ1)
+          Value: !Sub ${EnvironmentName} Nat Gateway (AZ2)
 
   PublicRouteTable:
     Type: AWS::EC2::RouteTable
