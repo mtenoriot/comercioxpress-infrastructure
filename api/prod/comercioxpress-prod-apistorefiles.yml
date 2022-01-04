@@ -1,0 +1,206 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: Creating "comercioxpress-apistorefiles" infrastructure from CloudFormation
+
+Parameters:
+  Owner:
+    Description: "Parametro que define el propietario"
+    Type: String
+  ServiceName:
+    Description: "Parametro que define el nombre del servicio"
+    Type: String
+  Environment:
+    Description: "Parametro que define el entorno por region"
+    Type: String
+  LambdaBucketName:
+    Description: "Nombre del Bucket donde se almacena el zip del codigo lambda"
+    Type: String
+  LambdaBucketKey:
+    Description: "Path del bucket s3 donde se almadena el zip del codigo lambda"
+    Type: String
+
+Resources:
+#  BucketSource:
+#    Type: 'AWS::S3::Bucket'
+#    Properties:
+#      BucketName: !Join
+#        - "."
+#        - - !Sub ${Owner}
+#          - !Sub ${Environment}
+#          - !Sub ${ServiceName}
+
+  LambdaPolicy:
+    Type: AWS::IAM::Policy
+    DependsOn:
+      - LambdaRole
+    Properties:
+      PolicyName: !Sub "${Owner}.${Environment}.${ServiceName}"
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Action:
+            - lambda:InvokeFunction
+            Resource:
+            - !Sub 'arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:${Owner}-${Environment}-${ServiceName}'
+          - Effect: Allow
+            Action:
+              - logs:*
+            Resource: arn:aws:logs:*:*:*
+          - Effect: Allow
+            Action:
+              - dynamodb:*
+            Resource: "*"
+          - Effect: Allow
+            Action:
+              - s3:*
+            Resource: "*"
+
+      Roles:
+        - !Ref 'LambdaRole'
+
+  LambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${Owner}.${Environment}.${ServiceName}"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Action:
+              - sts:AssumeRole
+            Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+
+  LambdaFunction:
+    Type: AWS::Lambda::Function
+    DependsOn:
+      - LambdaPolicy
+      - LambdaRole
+    Properties:
+      FunctionName: !Sub "${Owner}-${Environment}-${ServiceName}"
+      Description: !Sub "${Owner}-${Environment}-${ServiceName}"
+      MemorySize: 128
+      Timeout: 300
+      Handler: lambda_function.handler
+      Runtime: python3.7
+      Code:
+        S3Bucket: !Ref LambdaBucketName
+        S3Key: !Ref LambdaBucketKey
+      Role: !GetAtt LambdaRole.Arn
+      Environment:
+        Variables:
+          BUCKET_NAME: !Join
+            - "."
+            - - !Sub ${Owner}
+              - !Sub ${Environment}
+              - !Sub ${ServiceName}
+
+  LambdaPermission:
+    Type: 'AWS::Lambda::Permission'
+    Properties:
+      FunctionName: !GetAtt LambdaFunction.Arn
+      Action: 'lambda:InvokeFunction'
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Join [ "", [ 'arn:aws:execute-api:', !Ref 'AWS::Region', ":", !Ref 'AWS::AccountId', ":", !Ref 'ApiRest', "/*", ] ]
+    DependsOn: 
+      - ApiRest
+      - LambdaFunction
+
+  ApiRest:
+    Type: AWS::ApiGateway::RestApi
+    Properties:
+      Name: !Sub "${Owner}-${Environment}-${ServiceName}"
+      Description: !Sub "${Owner}-${Environment}-${ServiceName}"
+      FailOnWarnings: true
+  
+  ApiResourceFiles:
+    Type: "AWS::ApiGateway::Resource"
+    Properties:
+      RestApiId: !Ref ApiRest
+      ParentId: !GetAtt [ApiRest, RootResourceId]
+      PathPart: "files"
+
+  ApiResourceUpload:
+    Type: "AWS::ApiGateway::Resource"
+    Properties:
+      RestApiId: !Ref ApiRest
+      ParentId: !Ref ApiResourceFiles
+      PathPart: "upload"
+  
+  ApiMethodUpload:
+    Type: "AWS::ApiGateway::Method"
+    DependsOn: 
+      - LambdaPermission
+    Properties:
+      AuthorizationType: NONE
+      HttpMethod: ANY
+      Integration:
+        IntegrationHttpMethod: POST
+        Type: AWS_PROXY
+        Uri: !Sub arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${LambdaFunction.Arn}/invocations
+      ResourceId: !Ref ApiResourceUpload
+      RestApiId: !Ref ApiRest
+
+  ApiResourceDownload:
+    Type: "AWS::ApiGateway::Resource"
+    Properties:
+      RestApiId: !Ref ApiRest
+      ParentId: !Ref ApiResourceFiles
+      PathPart: "download"
+  
+  ApiResourceDownloadFilename:
+    DependsOn: 
+      - ApiResourceDownload
+    Type: "AWS::ApiGateway::Resource"
+    Properties:
+      RestApiId: !Ref ApiRest
+      ParentId: !Ref ApiResourceDownload
+      PathPart: "{filename}"
+
+  ApiMethodDownload:
+    Type: "AWS::ApiGateway::Method"
+    DependsOn: 
+      - LambdaPermission
+    Properties:
+      AuthorizationType: NONE
+      HttpMethod: ANY
+      Integration:
+        IntegrationHttpMethod: POST
+        Type: AWS_PROXY
+        Uri: !Sub arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${LambdaFunction.Arn}/invocations
+      ResourceId: !Ref ApiResourceDownloadFilename
+      RestApiId: !Ref ApiRest
+
+  ApiResourceFilesFilename:
+    DependsOn: 
+      - ApiResourceFiles
+    Type: "AWS::ApiGateway::Resource"
+    Properties:
+      RestApiId: !Ref ApiRest
+      ParentId: !Ref ApiResourceFiles
+      PathPart: "{filename}"
+
+  ApiMethodFilesFilename:
+    Type: "AWS::ApiGateway::Method"
+    DependsOn: 
+      - LambdaPermission
+    Properties:
+      AuthorizationType: NONE
+      HttpMethod: ANY
+      Integration:
+        IntegrationHttpMethod: POST
+        Type: AWS_PROXY
+        Uri: !Sub arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${LambdaFunction.Arn}/invocations
+      ResourceId: !Ref ApiResourceFilesFilename
+      RestApiId: !Ref ApiRest
+
+  ApiDeployment:
+    Type: "AWS::ApiGateway::Deployment"
+    DependsOn: 
+      - ApiMethodUpload
+      - ApiResourceDownloadFilename
+    Properties:
+      RestApiId: !Ref ApiRest
+      StageName: v1
